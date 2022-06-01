@@ -1,0 +1,473 @@
+---
+title: Maketing Campaign Analysis
+author: Audrey Nguyen, Shado Yang, Cecile Wiederkehr, Chengliang Fu, Edward Zhang, Weibin Huo
+date: April 2022
+output: pdf_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE,warning = FALSE)
+```
+
+## Introduction
+
+The Goal of this project is to analyze the Customer Personality data to help businesses better understand their customers and allows them to develop targeted marketing campaigns according to the specific needs, behaviors and concerns of different types of customers. This analysis can identify which customer segment is most likely to buy a product and then market the product only on that particular segment.
+
+
+```{r,results='hide',message=FALSE}
+#load libraries
+library(tidyverse)
+library(broom)
+library(kableExtra)
+library(psych)
+library(pixiedust)
+library(caret)
+library(fastDummies)
+library(factoextra)
+library(cluster)
+library(ggplot2)
+```
+
+
+```{r, include=FALSE}
+#Load up dataset 
+
+library(readr)
+mktg <- read_delim("marketing_campaign.csv", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE)
+
+```
+
+
+```{r, include=FALSE}
+
+# Remove NA
+mktg1 = na.omit(mktg)
+```
+## Data
+
+The data consists of the following customer attributes:
+
+* Customer's birth year from which the age can be derived
+
+* Customer's education level that has been divided into 2 categories: graduates and non-graduates
+
+* Customer's marital status that has been divided into 2 categories: single and non-single
+
+* Customer's yearly household income
+
+* Number of children in customer's household
+
+* Number of teenagers in customer's household
+
+* Date of customer's enrollment with the company
+
+* Number of days since customer's last purchase
+
+* Complain: 1 if the customer complained in the last 2 years, 0 otherwise
+
+The data also gives information on how much each customer has spent on wine, fruits, meat products, fish products, sweet products and gold products in the last 2 years.
+
+Their is also an indication wheather the customers have responded to 5 different campaigns.
+
+```{r, include=FALSE}
+#Create new columns for Customer Age, No. of Child in House, Total Spending and Whether they Accepted Marketing efforts or not
+
+mktg1['Age']=2022-mktg1$Year_Birth
+mktg1['Children']=mktg1$Kidhome+mktg1$Teenhome
+mktg1['Accepted']=mktg1$AcceptedCmp1+mktg1$AcceptedCmp2+mktg1$AcceptedCmp3+mktg1$AcceptedCmp4+mktg1$AcceptedCmp5
+mktg1['TotalSpent']=mktg1$MntMeatProducts+mktg1$MntFishProducts+mktg1$MntWines+mktg1$MntFruits+mktg1$MntSweetProducts+mktg1$MntGoldProds
+
+head(mktg1)
+mktg2<-mktg1
+```
+
+```{r, include=FALSE}
+max(mktg1$Income) #666'666
+min(mktg1$Income) #1'730
+mean(mktg1$Income) #52'247
+nrow(mktg1[mktg1$Income>125000,]) #8
+```
+The income ranges between $1'730 and $666'666. Only 8 customers have incomes over $125,000, the rest are normaly distributed.
+
+They're are customers with ages greater than 120 years old, which could be a mistake so we did not include them in the analysis.
+
+```{r, include=FALSE}
+mktg1 <- mktg1[mktg1$Age<=100,]
+mktg1 <- mktg1[mktg1$Income<125000,]
+```
+
+```{r, echo=FALSE, width=2.5}
+#Histogram of Income
+hist(mktg1$Income,40, xlab = "Income", main= "Histogram of Income",xlim=c(0,125000))
+```
+
+
+```{r, include=FALSE}
+hist(mktg1$Age,40, xlab = "Age", main= "Histogram of Age")
+
+```
+
+```{r, include=FALSE}
+mktg1fortable = mktg1 %>% rename(First=AcceptedCmp1,
+                              Second=AcceptedCmp2,
+                              Third=AcceptedCmp3,
+                              Fourth=AcceptedCmp4,
+                              Fifth=AcceptedCmp5)
+mktg1fortable <- mktg1fortable[, c(24, 25, 21, 22, 23)]
+
+sumcamp = mktg1fortable %>% summarize(first = sum(First),second = sum(Second), third = sum(Third), fourth = sum(Fourth), fifth = sum(Fifth))# first 142, second 30, third 163, fourth 164, fifth 162
+table <- round(cor(mktg1fortable),2)
+```
+
+
+```{r, include=FALSE}
+t.test(mktg1fortable$First, mktg1fortable$Second,alternative= "greater") #p-value=0
+```
+
+## Analysis
+
+### Campaign responses
+
+Overall, the most popular campaigns were the third fourth and fifth. The second campaign performed fatalistically significantly worse than all other campaigns.
+
+```{r, echo=FALSE}
+knitr::kable(sumcamp,  "simple", caption = "Number of Reponses to each Campaign") 
+```
+
+
+Some customers responded to several campaigns. The respondents to the first campaign correlate to the ones in the fifth campaign. There is hardly any correlation between the third campaign and the second and the third and the fourth.
+
+
+```{r, echo=FALSE}
+knitr::kable(table,  "simple", caption = "Correlation between different Campaigns") 
+```
+
+
+### Prediction
+
+High amount spent on Wine, Gold and Meat Products make them more likely to respond.
+
+
+```{r, include=FALSE}
+#covert marital status
+mktg1 <- mktg1 %>% mutate(Marital_Status = replace(Marital_Status, Marital_Status == "Divorced" | Marital_Status == "Widow" | Marital_Status == "Alone" | Marital_Status == "Absurd" | Marital_Status == "YOLO", "Single"))
+mktg1 <- mktg1 %>% mutate(Marital_Status = replace(Marital_Status, Marital_Status == "Together" | Marital_Status == "Married", "Taken"))
+
+mktg1 <- mktg1 %>% mutate(Education = replace(Education, Education == "Graduation"| Education == "PhD" | Education == "Master", "graduate"))
+mktg1 <- mktg1 %>% mutate(Education = replace(Education, Education == "Basic"| Education == "2n Cycle", "non-graduate"))
+str(mktg1)
+```
+
+
+```{r, include=FALSE}
+out2 <- glm(mktg1$Response ~ MntWines + MntFruits + MntMeatProducts + MntFishProducts + MntSweetProducts + MntGoldProds, data = mktg1, family = "binomial")
+summary(out2)
+#Wine, Gold and Meat Products make them more likely to respond
+
+out3 <- glm(mktg1$MntWines ~ Education + Marital_Status + Income + Age + Kidhome + Teenhome, data = mktg1, family = "gaussian")
+summary(out3)
+
+out4 <- glm(mktg1$MntGoldProds ~ Income + Age + Kidhome + Teenhome, data = mktg1, family = "gaussian")
+summary(out4)
+```
+
+### Clustering
+
+###PCA
+```{r}
+library(corrplot)
+library(collapse)
+library(bestNormalize)
+library(recipes)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+
+df6<- mktg2[,-c(1,2,6:8,27,28)]
+df6$Education<- as.factor(df6$Education)
+#skim(df6)
+###################################################################
+#Trasform Categorical to numeric
+
+#Education
+df6$Education <- fct_collapse(df6$Education,
+                                         "3" = c("2n Cycle", "Master","PhD"),
+                                         "1" = "Basic",
+                                         "2" = "Graduation")
+df6$Education <- as.numeric(levels(df6$Education))[df6$Education]
+
+#Marital_Status
+#combine Absurd,Alone,Divorced,Single,Widow and YOLO into one category of Single,and Married and Together into Together. Then I will numerically encode these categories as 1 and 2 respectively.
+df6$Marital_Status <- fct_collapse(df6$Marital_Status,
+                                         "1" = c("Absurd", "Alone","Divorced","Single",
+                                               "Widow","YOLO"),
+                                         "2" = c("Married","Together"))
+df6$Marital_Status <- as.numeric(levels(df6$Marital_Status))[df6$Marital_Status]
+
+df6 %>% 
+  cor() %>% 
+  corrplot( tl.cex = .7, tl.col = "black", method = "ellipse")
+```
+```{r}
+pca <- recipe(~., data = df6)
+#PCA is performed after standardizing each numeric variable to have mean zero and standard deviation one. If we dont do that then the variable with high value of mean has higher influence in the principal components generated.
+pca1 <- pca %>% step_orderNorm(all_numeric_predictors())
+pca <- pca1 %>% step_normalize(all_numeric_predictors())
+summary(pca)
+# apply principal component analysis on the dataset processed so far and see how many principal components explain most of the variance.
+check_pca <- pca %>% 
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  prcomp()
+check_pca
+
+tidy(check_pca, matrix = "eigenvalues")
+#Retain enough to explain a "large enough" proportion of the original data, 70% to 90% is usually used, so the suggest component is 8 
+
+pca <- pca %>% 
+  step_pca(all_numeric_predictors(), num_comp = 8) %>% 
+  prep() %>%
+  bake(new_data=NULL)
+```
+
+```{r}
+##Cluster Analysis for pca
+library(FactoMineR)
+library(factoextra)
+#Creating a factor map for the top 8 variables with the highest contributions
+staging <- PCA(df6, graph = FALSE)
+fviz_pca_var(staging, col.var = "contrib", gradient.cols = c("#002bbb", "#bb2e00"),select.var = list(contrib = 8), repel = TRUE)
+
+fviz_contrib(staging, choice = "var", axes = 1, top = 8)
+fviz_pca_biplot(staging)
+
+fviz_pca_var(staging, col.var = "contrib", gradient.cols = c("#002bbb", "#bb2e00"), repel = TRUE)
+```
+
+
+
+
+```{r, include=FALSE}
+mktg1=mktg1[c(-1,-2,-6,-7,-8,-20,-21,-22,-23,-24,-25)]
+```
+
+```{r, include=FALSE}
+view(mktg1)
+```
+
+
+```{r, include=FALSE}
+head(mktg1)
+```
+
+```{r, include=FALSE}
+#create dummy for education and marital_status
+
+dmy <- dummyVars(" ~ .", data = mktg1, fullRank = T)
+dat_transformed <- data.frame(predict(dmy, newdata = mktg1))
+
+glimpse(dat_transformed)
+```
+
+```{r, include=FALSE}
+df1=dat_transformed[c(-16,-17)]
+```
+
+```{r, include=FALSE}
+str(df1)
+```
+
+
+```{r, include=FALSE}
+set.seed(123)
+df1.scaled = scale(df1)
+kfit <- kmeans(df1.scaled, center=3)
+```
+
+```{r, include=FALSE}
+#total variance
+kfit$tot.withinss
+```
+
+```{r, include=FALSE}
+#size of each cluster
+kfit$size
+
+```
+
+```{r, include=FALSE}
+screedf = data.frame(k = 1:10,tot.withinss = NA)
+for(k in 1:nrow(screedf)){
+screedf$tot.withinss[k] =
+kmeans(df1.scaled,centers = k)$tot.withinss
+}
+ggOut = ggplot(screedf,aes(k,tot.withinss)) +
+geom_line() + theme_bw(15) + geom_point() +
+scale_x_continuous(breaks = 1:10) +
+xlab("Number of Clusters") +
+ylab("Total Within Group Sum of Squares")
+
+```
+
+```{r, include=FALSE}
+ggOut
+```
+
+```{r, include=FALSE}
+x<-fviz_nbclust(df1.scaled,kmeans,method="wss")+geom_vline(xintercept=3,linetype=2)
+x
+```
+
+
+```{r, include=FALSE}
+print(kfit$betweenss/kfit$totss)
+```
+
+```{r, include=FALSE}
+fviz_cluster(kfit, df1, geom = "point",ellipse.type = "norm",repel = TRUE)
+```
+
+```{r, include=FALSE}
+clusplot(df1.scaled,kfit$cluster,
+color = TRUE,
+main = "k=3")
+
+```
+
+
+```{r, include=FALSE}
+library(dbplyr)
+df_new<-cbind(df1, kfit$cluster)
+df_new$`kfit$cluster`<-as.factor(df_new$`kfit$cluster`)
+
+```
+
+```{r, include=FALSE}
+df1['cluster']=as.factor(kfit$cluster)
+```
+
+```{r, include=FALSE}
+head(df1)
+```
+
+```{r, echo=FALSE}
+view(df1)
+```
+
+
+```{r, echo=FALSE}
+#identify cluster
+ggplot(df1, aes(x=TotalSpent, y=Income, color=cluster)) +
+  geom_point()
+```
+
+```{r}
+acceptplot = ggplot(df1, aes(y = Accepted)) +
+ geom_bar(aes(fill = cluster), position = position_stack(reverse = TRUE)) +
+ theme(legend.position = "top")
+acceptplot
+```
+
+
+
+```{r, include=FALSE}
+wineplot = ggplot(df1, aes(x=cluster,y=MntWines,fill=cluster))+geom_boxplot(outlier.colour="black", outlier.shape=16,outlier.size=2, notch=T)
+wineplot
+```
+
+```{r, include=FALSE}
+fruitplot = ggplot(df1, aes(x=cluster,y=MntFruits,fill=cluster))+geom_boxplot(outlier.colour="black", outlier.shape=16,outlier.size=2, notch=T)
+fruitplot
+```
+
+```{r, include=FALSE}
+meatplot = ggplot(df1, aes(x=cluster,y=MntMeatProducts,fill=cluster))+geom_boxplot(outlier.colour="black", outlier.shape=16,outlier.size=2, notch=T)
+meatplot
+```
+
+```{r, include=FALSE}
+fishplot = ggplot(df1, aes(x=cluster,y=MntFishProducts,fill=cluster))+geom_boxplot(outlier.colour="black", outlier.shape=16,outlier.size=2, notch=T)
+fishplot
+```
+
+```{r, include=FALSE}
+sweetplot = ggplot(df1, aes(x=cluster,y=MntSweetProducts,fill=cluster))+geom_boxplot(outlier.colour="black", outlier.shape=16,outlier.size=2, notch=T)
+sweetplot
+```
+
+#Extra
+```{r}
+wss <- function(k) {
+  kmeans(pca , k, nstart = 200 )$tot.withinss
+}
+fviz_nbclust(pca, kmeans, method = "wss")
+
+res_kmeans <- kmeans(pca, centers = 3, nstart = 200)
+marketing_clustered <- df6 %>% mutate(cluster = res_kmeans$cluster)
+
+```
+
+#Eduaction
+```{r}
+explore <- marketing_clustered
+explore$Education <- as.factor(explore$Education)
+explore$cluster <- as.factor(explore$cluster)
+ggplot(data = explore) + geom_jitter(mapping = aes(x=cluster,y=Education))
+
+#Only cluster 3 has individuals with basic education
+```
+
+#Marital_Status
+```{r}
+explore <- marketing_clustered
+explore$Marital_Status <- as.factor(explore$Marital_Status)
+explore$cluster <- as.factor(explore$cluster)
+ggplot(data = explore) + geom_jitter(mapping = aes(x=cluster,y=Marital_Status))
+
+#we can tell nothing 
+```
+#income
+```{r}
+
+
+ggplot(explore) + geom_histogram(mapping = aes(x=Income),bins=50) + facet_wrap(~cluster)
+```
+
+#platform
+```{r}
+
+marketing_clustered%>%
+  select(cluster, NumWebPurchases, NumCatalogPurchases, NumStorePurchases, NumDealsPurchases, NumWebVisitsMonth)%>%
+  melt(id='cluster')%>%
+  ggplot(aes(as_factor(cluster), value))+
+  geom_boxplot()+
+  facet_wrap(~variable, ncol = 5)
+```
+
+
+#Amount spent on different items
+```{r}
+marketing_clustered%>%
+  select(cluster, MntWines, MntFruits, MntMeatProducts, MntSweetProducts, MntGoldProds)%>%
+  melt(id='cluster')%>%
+  ggplot(aes(as_factor(cluster), value))+
+  geom_boxplot()+
+  facet_wrap(~variable, ncol=5)
+
+#Most of the amount is spent on wines and meats. Cluster 1 and 3 are high spenders which is directly correlated with income
+```
+
+##AD
+```{r}
+marketing_clustered %>% 
+                  select(AcceptedCmp1,AcceptedCmp2,AcceptedCmp3,AcceptedCmp4,AcceptedCmp5,Response,cluster) %>%
+                  group_by(cluster) %>%
+                  summarise(AcceptedCmp1 = sum(AcceptedCmp1),
+                            AcceptedCmp2 = sum(AcceptedCmp2),
+                            AcceptedCmp3 = sum(AcceptedCmp3),
+                            AcceptedCmp4 = sum(AcceptedCmp4),
+                            AcceptedCmp5 = sum(AcceptedCmp5),
+                            Response = sum(Response))
+```
+
